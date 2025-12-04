@@ -67,6 +67,8 @@ package body Malef.Platform.Terminal.Output is
    Screen_Height  : Positive_Row_Count := 0;
    Screen_Width   : Positive_Col_Count := 0;
 
+   Use_Screen_Diff : constant Boolean := True;
+
    package Buffer is
       new Platform.Generic_Buffer (
       Capacity => 1024,
@@ -103,6 +105,17 @@ package body Malef.Platform.Terminal.Output is
             Screen_Next    := New_Next;
             Screen_Height  := Rows;
             Screen_Width   := Cols;
+
+            for Row in 1 .. Screen_Height loop
+               for Col in 1 .. Screen_Width loop
+                  Screen_Current (Row, Col) :=
+                    (Value      => ' ',
+                     Background => (others => 0),
+                     Foreground => (others => 0),
+                     Style      => [others => False]);
+                  Screen_Next (Row, Col) := Screen_Current (Row, Col);
+               end loop;
+            end loop;
          end;
       end if;
    end Ensure_Screen;
@@ -276,6 +289,9 @@ package body Malef.Platform.Terminal.Output is
    begin
       Opened_Frames := Opened_Frames + 1;
       if Opened_Frames = 1 then
+         if Use_Screen_Diff then
+            Ensure_Screen;
+         end if;
          Buffer.Put (ASCII.ESC & "[?2026h");
       end if;
    end Begin_Frame;
@@ -285,6 +301,34 @@ package body Malef.Platform.Terminal.Output is
       if Opened_Frames /= 0 then
          Opened_Frames := Opened_Frames - 1;
          if Opened_Frames = 0 then
+            if Use_Screen_Diff
+              and then Screen_Current /= null
+              and then Screen_Next /= null
+            then
+               declare
+                  Current : Screen_Buffer renames Screen_Current.all;
+                  Next    : Screen_Buffer renames Screen_Next.all;
+               begin
+                  for Row in Current'Range (1) loop
+                     for Col in Current'Range (2) loop
+                        if Current (Row, Col) /= Next (Row, Col) then
+                           declare
+                              Cell_Value : constant Cell := Next (Row, Col);
+                           begin
+                              Move_To (Row, Col);
+                              Format
+                                (Cell_Value.Background,
+                                 Cell_Value.Foreground,
+                                 Cell_Value.Style);
+                              Buffer.Wide_Wide_Put (Cell_Value.Value);
+                              Current (Row, Col) := Cell_Value;
+                           end;
+                        end if;
+                     end loop;
+                  end loop;
+               end;
+            end if;
+
             Buffer.Put (ASCII.ESC & "[?2026l");
             Flush;
          end if;
@@ -311,10 +355,15 @@ package body Malef.Platform.Terminal.Output is
       Foreground : in RGBA_Type;
       Style      : in Style_Type) is
    begin
-      Move_To (Position.Row, Position.Col);
-      Format (Background, Foreground, Style);
-      Buffer.Wide_Wide_Put (Item);
-      Current_Cursor.Col := @ + Width (Item);
+      if not (Use_Screen_Diff
+              and then Opened_Frames > 0
+              and then Screen_Next /= null)
+      then
+         Move_To (Position.Row, Position.Col);
+         Format (Background, Foreground, Style);
+         Buffer.Wide_Wide_Put (Item);
+         Current_Cursor.Col := @ + Width (Item);
+      end if;
 
       if Screen_Next /= null then
          declare
@@ -346,10 +395,15 @@ package body Malef.Platform.Terminal.Output is
       Foreground : in Palette_Index;
       Style      : in Style_Type) is
    begin
-      Move_To (Position.Row, Position.Col);
-      Format (Background, Foreground, Style);
-      Buffer.Wide_Wide_Put (Item);
-      Current_Cursor.Col := @ + Width (Item);
+      if not (Use_Screen_Diff
+              and then Opened_Frames > 0
+              and then Screen_Next /= null)
+      then
+         Move_To (Position.Row, Position.Col);
+         Format (Background, Foreground, Style);
+         Buffer.Wide_Wide_Put (Item);
+         Current_Cursor.Col := @ + Width (Item);
+      end if;
 
       if Screen_Next /= null then
          declare
@@ -381,11 +435,16 @@ package body Malef.Platform.Terminal.Output is
       Foreground : in RGBA_Type;
       Style      : in Style_Type) is
    begin
-      Move_To (Position.Row, Position.Col);
-      Format (Background, Foreground, Style);
-      Buffer.Wide_Wide_Put (Item);
-      -- TODO: Use the real character size
-      Current_Cursor.Col := @ + Width (Item);
+      if not (Use_Screen_Diff
+              and then Opened_Frames > 0
+              and then Screen_Next /= null)
+      then
+         Move_To (Position.Row, Position.Col);
+         Format (Background, Foreground, Style);
+         Buffer.Wide_Wide_Put (Item);
+         -- TODO: Use the real character size
+         Current_Cursor.Col := @ + Width (Item);
+      end if;
 
       if Screen_Next /= null then
          declare
@@ -414,10 +473,15 @@ package body Malef.Platform.Terminal.Output is
       Foreground : in Palette_Index;
       Style      : in Style_Type) is
    begin
-      Move_To (Position.Row, Position.Col);
-      Format (Background, Foreground, Style);
-      Buffer.Wide_Wide_Put (Item);
-      Current_Cursor.Col := @ + Width (Item);
+      if not (Use_Screen_Diff
+              and then Opened_Frames > 0
+              and then Screen_Next /= null)
+      then
+         Move_To (Position.Row, Position.Col);
+         Format (Background, Foreground, Style);
+         Buffer.Wide_Wide_Put (Item);
+         Current_Cursor.Col := @ + Width (Item);
+      end if;
 
       if Screen_Next /= null then
          declare

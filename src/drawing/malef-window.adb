@@ -138,8 +138,7 @@ package body Malef.Window is
          case Event.Name is
             when Malef.Events.Resize_Event =>
                Window.Resize (Event.New_Size.Row, Event.New_Size.Col);
-            when Malef.Events.Cancel_Event
-               | Malef.Events.Kill_Event
+            when Malef.Events.Kill_Event
                | Malef.Events.Input_Closed =>
                Malef.System.Finalize;
                if Observers (Event.Name).Is_Empty then
@@ -153,6 +152,8 @@ package body Malef.Window is
                   Ada.Task_Identification.Environment_Task);
                pragma Warnings (On,
                   "potentially blocking operation in protected operation");
+            when Malef.Events.Cancel_Event =>
+               null;
             when others => null;
          end case;
 

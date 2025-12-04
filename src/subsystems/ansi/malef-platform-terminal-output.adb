@@ -198,12 +198,18 @@ package body Malef.Platform.Terminal.Output is
       Format (7, 0, [others => False]);
       Opened_Frames := 0;
       Buffer.Put (ASCII.ESC & "[?25l"); -- Make cursor invisible
+      -- Enable extended mouse reporting (button + motion, SGR coordinates)
+      Buffer.Put (ASCII.ESC & "[?1002h");
+      Buffer.Put (ASCII.ESC & "[?1006h");
       Flush;
    end Initialize;
 
    procedure Finalize is
    begin
       -- TODO: Call termios
+      -- Disable mouse reporting and restore screen/cursor
+      Buffer.Put (ASCII.ESC & "[?1006l");
+      Buffer.Put (ASCII.ESC & "[?1002l");
       Buffer.Put (ASCII.ESC & "[?25h"   -- Make cursor visible
                 & ASCII.ESC & "[?1049l");
       Flush;

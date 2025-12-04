@@ -31,6 +31,7 @@ with Ada.Text_IO;
 with Ada.Text_IO.Text_Streams;
 with Malef.Platform.Generic_Buffer;
 with Malef.Platform.Images;
+with Malef.Platform.Terminal.Input;
 
 package body Malef.Platform.Terminal.Output is
 
@@ -45,11 +46,66 @@ package body Malef.Platform.Terminal.Output is
    Current_Foreground_Id : Palette_Index;
    Opened_Frames         : Natural;
 
+   --  Backing buffer scaffolding (to be completed in follow-up steps).
+   --  For now we just define the cell and buffer types so that higher-level
+   --  code can start reasoning about an in-memory screen model before we
+   --  actually diff it in End_Frame.
+
+   type Cell is record
+      Value      : Glyph;
+      Background : RGBA_Type;
+      Foreground : RGBA_Type;
+      Style      : Style_Type;
+   end record;
+
+   type Screen_Buffer is array (Row_Type range <>, Col_Type range <>) of Cell;
+
+   type Screen_Buffer_Access is access Screen_Buffer;
+
+   Screen_Current : Screen_Buffer_Access := null;
+   Screen_Next    : Screen_Buffer_Access := null;
+   Screen_Height  : Positive_Row_Count := 0;
+   Screen_Width   : Positive_Col_Count := 0;
+
    package Buffer is
       new Platform.Generic_Buffer (
       Capacity => 1024,
       Stream   => Ada.Text_IO.Text_Streams.Stream (
                      Ada.Text_IO.Standard_Output));
+
+   -->> Backing buffer helpers <<--
+
+   procedure Ensure_Screen is
+      Rows : Positive_Row_Count;
+      Cols : Positive_Col_Count;
+   begin
+      Malef.Platform.Terminal.Input.Get_Dimensions (Rows, Cols);
+
+      if Rows = 0 or else Cols = 0 then
+         Screen_Current := null;
+         Screen_Next    := null;
+         Screen_Height  := 0;
+         Screen_Width   := 0;
+         return;
+      end if;
+
+      if Screen_Current = null
+        or else Screen_Height /= Rows
+        or else Screen_Width /= Cols
+      then
+         declare
+            New_Current : constant Screen_Buffer_Access :=
+              new Screen_Buffer (1 .. Rows, 1 .. Cols);
+            New_Next    : constant Screen_Buffer_Access :=
+              new Screen_Buffer (1 .. Rows, 1 .. Cols);
+         begin
+            Screen_Current := New_Current;
+            Screen_Next    := New_Next;
+            Screen_Height  := Rows;
+            Screen_Width   := Cols;
+         end;
+      end if;
+   end Ensure_Screen;
 
    -->> Formatting <<--
 
@@ -201,6 +257,7 @@ package body Malef.Platform.Terminal.Output is
       -- Enable extended mouse reporting (button + motion, SGR coordinates)
       Buffer.Put (ASCII.ESC & "[?1002h");
       Buffer.Put (ASCII.ESC & "[?1006h");
+      Ensure_Screen;
       Flush;
    end Initialize;
 
@@ -258,6 +315,28 @@ package body Malef.Platform.Terminal.Output is
       Format (Background, Foreground, Style);
       Buffer.Wide_Wide_Put (Item);
       Current_Cursor.Col := @ + Width (Item);
+
+      if Screen_Next /= null then
+         declare
+            Row : constant Row_Type := Position.Row;
+            Col : Col_Type := Position.Col;
+         begin
+            if Row >= 1
+              and then Row <= Screen_Height
+            then
+               for J in Item'Range loop
+                  if Col >= 1 and then Col <= Screen_Width then
+                     Screen_Next (Row, Col) :=
+                       (Value      => Item (J),
+                        Background => Background,
+                        Foreground => Foreground,
+                        Style      => Style);
+                  end if;
+                  Col := Col + 1;
+               end loop;
+            end if;
+         end;
+      end if;
    end Put;
 
    procedure Put_Indexed (
@@ -271,6 +350,28 @@ package body Malef.Platform.Terminal.Output is
       Format (Background, Foreground, Style);
       Buffer.Wide_Wide_Put (Item);
       Current_Cursor.Col := @ + Width (Item);
+
+      if Screen_Next /= null then
+         declare
+            Row : constant Row_Type := Position.Row;
+            Col : Col_Type := Position.Col;
+         begin
+            if Row >= 1
+              and then Row <= Screen_Height
+            then
+               for J in Item'Range loop
+                  if Col >= 1 and then Col <= Screen_Width then
+                     Screen_Next (Row, Col) :=
+                       (Value      => Item (J),
+                        Background => Current_Background,
+                        Foreground => Current_Foreground,
+                        Style      => Style);
+                  end if;
+                  Col := Col + 1;
+               end loop;
+            end if;
+         end;
+      end if;
    end Put_Indexed;
 
    procedure Put (
@@ -285,6 +386,25 @@ package body Malef.Platform.Terminal.Output is
       Buffer.Wide_Wide_Put (Item);
       -- TODO: Use the real character size
       Current_Cursor.Col := @ + Width (Item);
+
+      if Screen_Next /= null then
+         declare
+            Row : constant Row_Type := Position.Row;
+            Col : constant Col_Type := Position.Col;
+         begin
+            if Row >= 1
+              and then Row <= Screen_Height
+              and then Col >= 1
+              and then Col <= Screen_Width
+            then
+               Screen_Next (Row, Col) :=
+                 (Value      => Item,
+                  Background => Background,
+                  Foreground => Foreground,
+                  Style      => Style);
+            end if;
+         end;
+      end if;
    end Put;
 
    procedure Put_Indexed (
@@ -298,6 +418,25 @@ package body Malef.Platform.Terminal.Output is
       Format (Background, Foreground, Style);
       Buffer.Wide_Wide_Put (Item);
       Current_Cursor.Col := @ + Width (Item);
+
+      if Screen_Next /= null then
+         declare
+            Row : constant Row_Type := Position.Row;
+            Col : constant Col_Type := Position.Col;
+         begin
+            if Row >= 1
+              and then Row <= Screen_Height
+              and then Col >= 1
+              and then Col <= Screen_Width
+            then
+               Screen_Next (Row, Col) :=
+                 (Value      => Item,
+                  Background => Current_Background,
+                  Foreground => Current_Foreground,
+                  Style      => Style);
+            end if;
+         end;
+      end if;
    end Put_Indexed;
 
    procedure Flush is

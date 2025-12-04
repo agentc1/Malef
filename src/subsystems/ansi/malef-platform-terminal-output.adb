@@ -29,6 +29,7 @@
 
 with Ada.Text_IO;
 with Ada.Text_IO.Text_Streams;
+with Ada.Environment_Variables;
 with Malef.Platform.Generic_Buffer;
 with Malef.Platform.Images;
 with Malef.Platform.Terminal.Input;
@@ -68,6 +69,12 @@ package body Malef.Platform.Terminal.Output is
    Screen_Width   : Positive_Col_Count := 0;
 
    Use_Screen_Diff : constant Boolean := True;
+
+   Debug_Diff : constant Boolean :=
+     Ada.Environment_Variables.Exists ("MALEF_DIFF_DEBUG");
+
+   Diff_Log            : Ada.Text_IO.File_Type;
+   Diff_Log_Initialized : Boolean := False;
 
    package Buffer is
       new Platform.Generic_Buffer (
@@ -119,6 +126,36 @@ package body Malef.Platform.Terminal.Output is
          end;
       end if;
    end Ensure_Screen;
+
+   procedure Log_Diff (Changed, Total : Natural) is
+   begin
+      if not Debug_Diff then
+         return;
+      end if;
+
+      if not Diff_Log_Initialized then
+         begin
+            Ada.Text_IO.Open
+              (File => Diff_Log,
+               Mode => Ada.Text_IO.Append_File,
+               Name => "malef_diff.log");
+         exception
+            when others =>
+               Ada.Text_IO.Create
+                 (File => Diff_Log,
+                  Mode => Ada.Text_IO.Out_File,
+                  Name => "malef_diff.log");
+         end;
+         Diff_Log_Initialized := True;
+      end if;
+
+      Ada.Text_IO.Put_Line
+        (Diff_Log,
+         "frame changed="
+         & Natural'Image (Changed)
+         & " total="
+         & Natural'Image (Total));
+   end Log_Diff;
 
    -->> Formatting <<--
 
@@ -308,9 +345,12 @@ package body Malef.Platform.Terminal.Output is
                declare
                   Current : Screen_Buffer renames Screen_Current.all;
                   Next    : Screen_Buffer renames Screen_Next.all;
+                  Changed : Natural := 0;
+                  Total   : Natural := 0;
                begin
                   for Row in Current'Range (1) loop
                      for Col in Current'Range (2) loop
+                        Total := Total + 1;
                         if Current (Row, Col) /= Next (Row, Col) then
                            declare
                               Cell_Value : constant Cell := Next (Row, Col);
@@ -322,10 +362,13 @@ package body Malef.Platform.Terminal.Output is
                                  Cell_Value.Style);
                               Buffer.Wide_Wide_Put (Cell_Value.Value);
                               Current (Row, Col) := Cell_Value;
+                              Changed := Changed + 1;
                            end;
                         end if;
                      end loop;
                   end loop;
+
+                  Log_Diff (Changed, Total);
                end;
             end if;
 

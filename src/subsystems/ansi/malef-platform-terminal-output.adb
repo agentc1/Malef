@@ -47,6 +47,9 @@ package body Malef.Platform.Terminal.Output is
    Current_Foreground_Id : Palette_Index;
    Opened_Frames         : Natural;
 
+   Logical_Cursor       : Cursor_Type := (Row => 1, Col => 1);
+   Logical_Cursor_Used  : Boolean := False;
+
    --  Backing buffer scaffolding (to be completed in follow-up steps).
    --  For now we just define the cell and buffer types so that higher-level
    --  code can start reasoning about an in-memory screen model before we
@@ -303,7 +306,7 @@ package body Malef.Platform.Terminal.Output is
       Buffer.Put (ASCII.ESC & "[?1049h");
       Format (7, 0, [others => False]);
       Opened_Frames := 0;
-      Buffer.Put (ASCII.ESC & "[?25l"); -- Make cursor invisible
+      -- Keep the hardware cursor visible; Ace/TUI will position it explicitly.
       -- Enable extended mouse reporting (button + motion, SGR coordinates)
       Buffer.Put (ASCII.ESC & "[?1002h");
       Buffer.Put (ASCII.ESC & "[?1006h");
@@ -372,11 +375,27 @@ package body Malef.Platform.Terminal.Output is
                end;
             end if;
 
+            if Logical_Cursor_Used then
+               Move_To (Logical_Cursor.Row, Logical_Cursor.Col);
+               Logical_Cursor_Used := False;
+            end if;
+
             Buffer.Put (ASCII.ESC & "[?2026l");
             Flush;
          end if;
       end if;
    end End_Frame;
+
+   procedure Set_Cursor (
+      Position : in Cursor_Type) is
+   begin
+      if Use_Screen_Diff and then Opened_Frames > 0 then
+         Logical_Cursor := Position;
+         Logical_Cursor_Used := True;
+      else
+         Move_To (Position.Row, Position.Col);
+      end if;
+   end Set_Cursor;
 
    function Width (
       Item : in Glyph)

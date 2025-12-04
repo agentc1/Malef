@@ -316,4 +316,10 @@ package body Malef.Platform.Terminal.Output is
       end if;
    end Set_Title;
 
+   procedure Set_Cursor (
+      Position : in Cursor_Type) is
+   begin
+      Move_To (Position);
+   end Set_Cursor;
+
 end Malef.Platform.Terminal.Output;

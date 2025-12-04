@@ -93,4 +93,11 @@ package Malef.Platform.Terminal.Output is
       Item : in Wide_Wide_String);
    -- This procedure changes the terminal's title.
 
+   procedure Set_Cursor (
+      Position : in Cursor_Type);
+   -- This procedure sets the logical cursor position. When using synchronized
+   -- output / backing buffers, the hardware cursor will be moved to this
+   -- position at the end of the current frame. When not using frames, this
+   -- moves the cursor immediately.
+
 end Malef.Platform.Terminal.Output;

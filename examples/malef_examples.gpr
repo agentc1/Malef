@@ -33,6 +33,7 @@ project Malef_Examples is
             , "malef_examples.adb"
             , "style_example.adb"
             , "rgb_window.adb"
+            , "mouse_demo.adb"
             );
       when "windows" =>
          for Main use

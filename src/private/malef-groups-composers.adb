@@ -39,35 +39,45 @@ package body Malef.Groups.Composers with Preelaborate is
    -- base layer (Top) to show up (at least in normal mode).
    -- We also have to keep in mind that we have to sum both alpha values.
 
-   pragma Warnings (Off, "constant ""B_Str"" is not referenced");
-   function Weight (Top, Bottom : in RGBA_Type)
-      return Weights is ((
-      declare
-          Other : constant Component_Type
-                := Component_Type'Min (Bottom (Alpha),
-                                       Component_Type'Last - Top (Alpha));
-          Total : constant Component_Type := Top (Alpha) + Other;
-          T_Str : constant Float := Float (Top (Alpha)) / Float (Total);
-          B_Str : constant Float := 1.0 - T_Str;
-      begin
-         (Total, T_Str, B_Str)));
-   pragma Warnings (On, "constant ""B_Str"" is not referenced");
+   function Weight (Top, Bottom : in RGBA_Type) return Weights is
+      Other : constant Component_Type :=
+        Component_Type'Min
+          (Bottom (Alpha), Component_Type'Last - Top (Alpha));
+      Total : constant Component_Type := Top (Alpha) + Other;
+      T_Str : constant Float := Float (Top (Alpha)) / Float (Total);
+      B_Str : constant Float := 1.0 - T_Str;
+   begin
+      return (Alpha  => Total,
+              Top    => T_Str,
+              Bottom => B_Str);
+   end Weight;
 
-   -- TODO: Remove warnings, GNAT doesn't like (declare) blocks yet
-   pragma Warnings (Off, "constant ""W"" is not referenced");
-   function Simple_Addition (Top, Bottom : in RGBA_Type)
-      return RGBA_Type is (
-      (if    Top (Alpha) = 255 then Top
-       elsif Top (Alpha) = 0   then Bottom
-       else (declare
-         W : constant Weights := Weight (Top, Bottom);
-       begin
-          [for I in Top'Range =>
-             (if I = Alpha then W.Alpha
-               else Component_Type (Add (Float (Top (I)) * W.Top,
-                                         Float (Bottom (I)) * W.Bottom)))])
-      ));
-   pragma Warnings (On, "constant ""W"" is not referenced");
+   function Simple_Addition (Top, Bottom : in RGBA_Type) return RGBA_Type is
+      Result : RGBA_Type;
+   begin
+      if Top (Alpha) = 255 then
+         return Top;
+      elsif Top (Alpha) = 0 then
+         return Bottom;
+      else
+         declare
+            W : constant Weights := Weight (Top, Bottom);
+         begin
+            for I in Top'Range loop
+               if I = Alpha then
+                  Result (I) := W.Alpha;
+               else
+                  Result (I) :=
+                    Component_Type
+                      (Add (Float (Top (I)) * W.Top,
+                            Float (Bottom (I)) * W.Bottom));
+               end if;
+            end loop;
+
+            return Result;
+         end;
+      end if;
+   end Simple_Addition;
 
    -->> Adders <<--
 

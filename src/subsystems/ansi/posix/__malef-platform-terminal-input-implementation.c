@@ -43,7 +43,18 @@ void MALEF(prepare) (void) {
   tcgetattr (STDIN_FILENO, &old_term);
   tcgetattr (STDIN_FILENO, &new_term);
 
-  new_term.c_lflag &= ~ICANON & ~ECHO;
+  new_term.c_lflag &= ~ICANON;
+  new_term.c_lflag &= ~ECHO;
+#ifdef ISIG
+  new_term.c_lflag &= ~ISIG;
+#endif
+
+#ifdef IXON
+  new_term.c_iflag &= ~IXON;
+#endif
+#ifdef IXOFF
+  new_term.c_iflag &= ~IXOFF;
+#endif
 
   #ifdef VEOF
     MALEF(eof_ch) = new_term.c_cc[VEOF];

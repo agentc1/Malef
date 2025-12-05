@@ -29,8 +29,10 @@
 
 with Ada.Text_IO;
 with Ada.Text_IO.Text_Streams;
+with Ada.Environment_Variables;
 with Malef.Platform.Generic_Buffer;
 with Malef.Platform.Images;
+with Malef.Platform.Terminal.Input;
 
 package body Malef.Platform.Terminal.Output is
 
@@ -45,11 +47,118 @@ package body Malef.Platform.Terminal.Output is
    Current_Foreground_Id : Palette_Index;
    Opened_Frames         : Natural;
 
+   Logical_Cursor       : Cursor_Type := (Row => 1, Col => 1);
+   Logical_Cursor_Used  : Boolean := False;
+
+   --  Backing buffer scaffolding (to be completed in follow-up steps).
+   --  For now we just define the cell and buffer types so that higher-level
+   --  code can start reasoning about an in-memory screen model before we
+   --  actually diff it in End_Frame.
+
+   type Cell is record
+      Value      : Glyph;
+      Background : RGBA_Type;
+      Foreground : RGBA_Type;
+      Style      : Style_Type;
+   end record;
+
+   type Screen_Buffer is array (Row_Type range <>, Col_Type range <>) of Cell;
+
+   type Screen_Buffer_Access is access Screen_Buffer;
+
+   Screen_Current : Screen_Buffer_Access := null;
+   Screen_Next    : Screen_Buffer_Access := null;
+   Screen_Height  : Positive_Row_Count := 0;
+   Screen_Width   : Positive_Col_Count := 0;
+
+   Use_Screen_Diff : constant Boolean := True;
+
+   Debug_Diff : constant Boolean :=
+     Ada.Environment_Variables.Exists ("MALEF_DIFF_DEBUG");
+
+   Diff_Log            : Ada.Text_IO.File_Type;
+   Diff_Log_Initialized : Boolean := False;
+
    package Buffer is
       new Platform.Generic_Buffer (
       Capacity => 1024,
       Stream   => Ada.Text_IO.Text_Streams.Stream (
                      Ada.Text_IO.Standard_Output));
+
+   -->> Backing buffer helpers <<--
+
+   procedure Ensure_Screen is
+      Rows : Positive_Row_Count;
+      Cols : Positive_Col_Count;
+   begin
+      Malef.Platform.Terminal.Input.Get_Dimensions (Rows, Cols);
+
+      if Rows = 0 or else Cols = 0 then
+         Screen_Current := null;
+         Screen_Next    := null;
+         Screen_Height  := 0;
+         Screen_Width   := 0;
+         return;
+      end if;
+
+      if Screen_Current = null
+        or else Screen_Height /= Rows
+        or else Screen_Width /= Cols
+      then
+         declare
+            New_Current : constant Screen_Buffer_Access :=
+              new Screen_Buffer (1 .. Rows, 1 .. Cols);
+            New_Next    : constant Screen_Buffer_Access :=
+              new Screen_Buffer (1 .. Rows, 1 .. Cols);
+         begin
+            Screen_Current := New_Current;
+            Screen_Next    := New_Next;
+            Screen_Height  := Rows;
+            Screen_Width   := Cols;
+
+            for Row in 1 .. Screen_Height loop
+               for Col in 1 .. Screen_Width loop
+                  Screen_Current (Row, Col) :=
+                    (Value      => ' ',
+                     Background => (others => 0),
+                     Foreground => (others => 0),
+                     Style      => [others => False]);
+                  Screen_Next (Row, Col) := Screen_Current (Row, Col);
+               end loop;
+            end loop;
+         end;
+      end if;
+   end Ensure_Screen;
+
+   procedure Log_Diff (Changed, Total : Natural) is
+   begin
+      if not Debug_Diff then
+         return;
+      end if;
+
+      if not Diff_Log_Initialized then
+         begin
+            Ada.Text_IO.Open
+              (File => Diff_Log,
+               Mode => Ada.Text_IO.Append_File,
+               Name => "malef_diff.log");
+         exception
+            when others =>
+               Ada.Text_IO.Create
+                 (File => Diff_Log,
+                  Mode => Ada.Text_IO.Out_File,
+                  Name => "malef_diff.log");
+         end;
+         Diff_Log_Initialized := True;
+      end if;
+
+      Ada.Text_IO.Put_Line
+        (Diff_Log,
+         "frame changed="
+         & Natural'Image (Changed)
+         & " total="
+         & Natural'Image (Total));
+   end Log_Diff;
 
    -->> Formatting <<--
 
@@ -197,13 +306,20 @@ package body Malef.Platform.Terminal.Output is
       Buffer.Put (ASCII.ESC & "[?1049h");
       Format (7, 0, [others => False]);
       Opened_Frames := 0;
-      Buffer.Put (ASCII.ESC & "[?25l"); -- Make cursor invisible
+      -- Keep the hardware cursor visible; Ace/TUI will position it explicitly.
+      -- Enable extended mouse reporting (button + motion, SGR coordinates)
+      Buffer.Put (ASCII.ESC & "[?1002h");
+      Buffer.Put (ASCII.ESC & "[?1006h");
+      Ensure_Screen;
       Flush;
    end Initialize;
 
    procedure Finalize is
    begin
       -- TODO: Call termios
+      -- Disable mouse reporting and restore screen/cursor
+      Buffer.Put (ASCII.ESC & "[?1006l");
+      Buffer.Put (ASCII.ESC & "[?1002l");
       Buffer.Put (ASCII.ESC & "[?25h"   -- Make cursor visible
                 & ASCII.ESC & "[?1049l");
       Flush;
@@ -213,6 +329,9 @@ package body Malef.Platform.Terminal.Output is
    begin
       Opened_Frames := Opened_Frames + 1;
       if Opened_Frames = 1 then
+         if Use_Screen_Diff then
+            Ensure_Screen;
+         end if;
          Buffer.Put (ASCII.ESC & "[?2026h");
       end if;
    end Begin_Frame;
@@ -222,11 +341,61 @@ package body Malef.Platform.Terminal.Output is
       if Opened_Frames /= 0 then
          Opened_Frames := Opened_Frames - 1;
          if Opened_Frames = 0 then
+            if Use_Screen_Diff
+              and then Screen_Current /= null
+              and then Screen_Next /= null
+            then
+               declare
+                  Current : Screen_Buffer renames Screen_Current.all;
+                  Next    : Screen_Buffer renames Screen_Next.all;
+                  Changed : Natural := 0;
+                  Total   : Natural := 0;
+               begin
+                  for Row in Current'Range (1) loop
+                     for Col in Current'Range (2) loop
+                        Total := Total + 1;
+                        if Current (Row, Col) /= Next (Row, Col) then
+                           declare
+                              Cell_Value : constant Cell := Next (Row, Col);
+                           begin
+                              Move_To (Row, Col);
+                              Format
+                                (Cell_Value.Background,
+                                 Cell_Value.Foreground,
+                                 Cell_Value.Style);
+                              Buffer.Wide_Wide_Put (Cell_Value.Value);
+                              Current (Row, Col) := Cell_Value;
+                              Changed := Changed + 1;
+                           end;
+                        end if;
+                     end loop;
+                  end loop;
+
+                  Log_Diff (Changed, Total);
+               end;
+            end if;
+
+            if Logical_Cursor_Used then
+               Move_To (Logical_Cursor.Row, Logical_Cursor.Col);
+               Logical_Cursor_Used := False;
+            end if;
+
             Buffer.Put (ASCII.ESC & "[?2026l");
             Flush;
          end if;
       end if;
    end End_Frame;
+
+   procedure Set_Cursor (
+      Position : in Cursor_Type) is
+   begin
+      if Use_Screen_Diff and then Opened_Frames > 0 then
+         Logical_Cursor := Position;
+         Logical_Cursor_Used := True;
+      else
+         Move_To (Position.Row, Position.Col);
+      end if;
+   end Set_Cursor;
 
    function Width (
       Item : in Glyph)
@@ -248,10 +417,37 @@ package body Malef.Platform.Terminal.Output is
       Foreground : in RGBA_Type;
       Style      : in Style_Type) is
    begin
-      Move_To (Position.Row, Position.Col);
-      Format (Background, Foreground, Style);
-      Buffer.Wide_Wide_Put (Item);
-      Current_Cursor.Col := @ + Width (Item);
+      if not (Use_Screen_Diff
+              and then Opened_Frames > 0
+              and then Screen_Next /= null)
+      then
+         Move_To (Position.Row, Position.Col);
+         Format (Background, Foreground, Style);
+         Buffer.Wide_Wide_Put (Item);
+         Current_Cursor.Col := @ + Width (Item);
+      end if;
+
+      if Screen_Next /= null then
+         declare
+            Row : constant Row_Type := Position.Row;
+            Col : Col_Type := Position.Col;
+         begin
+            if Row >= 1
+              and then Row <= Screen_Height
+            then
+               for J in Item'Range loop
+                  if Col >= 1 and then Col <= Screen_Width then
+                     Screen_Next (Row, Col) :=
+                       (Value      => Item (J),
+                        Background => Background,
+                        Foreground => Foreground,
+                        Style      => Style);
+                  end if;
+                  Col := Col + 1;
+               end loop;
+            end if;
+         end;
+      end if;
    end Put;
 
    procedure Put_Indexed (
@@ -261,10 +457,37 @@ package body Malef.Platform.Terminal.Output is
       Foreground : in Palette_Index;
       Style      : in Style_Type) is
    begin
-      Move_To (Position.Row, Position.Col);
-      Format (Background, Foreground, Style);
-      Buffer.Wide_Wide_Put (Item);
-      Current_Cursor.Col := @ + Width (Item);
+      if not (Use_Screen_Diff
+              and then Opened_Frames > 0
+              and then Screen_Next /= null)
+      then
+         Move_To (Position.Row, Position.Col);
+         Format (Background, Foreground, Style);
+         Buffer.Wide_Wide_Put (Item);
+         Current_Cursor.Col := @ + Width (Item);
+      end if;
+
+      if Screen_Next /= null then
+         declare
+            Row : constant Row_Type := Position.Row;
+            Col : Col_Type := Position.Col;
+         begin
+            if Row >= 1
+              and then Row <= Screen_Height
+            then
+               for J in Item'Range loop
+                  if Col >= 1 and then Col <= Screen_Width then
+                     Screen_Next (Row, Col) :=
+                       (Value      => Item (J),
+                        Background => Current_Background,
+                        Foreground => Current_Foreground,
+                        Style      => Style);
+                  end if;
+                  Col := Col + 1;
+               end loop;
+            end if;
+         end;
+      end if;
    end Put_Indexed;
 
    procedure Put (
@@ -274,11 +497,35 @@ package body Malef.Platform.Terminal.Output is
       Foreground : in RGBA_Type;
       Style      : in Style_Type) is
    begin
-      Move_To (Position.Row, Position.Col);
-      Format (Background, Foreground, Style);
-      Buffer.Wide_Wide_Put (Item);
-      -- TODO: Use the real character size
-      Current_Cursor.Col := @ + Width (Item);
+      if not (Use_Screen_Diff
+              and then Opened_Frames > 0
+              and then Screen_Next /= null)
+      then
+         Move_To (Position.Row, Position.Col);
+         Format (Background, Foreground, Style);
+         Buffer.Wide_Wide_Put (Item);
+         -- TODO: Use the real character size
+         Current_Cursor.Col := @ + Width (Item);
+      end if;
+
+      if Screen_Next /= null then
+         declare
+            Row : constant Row_Type := Position.Row;
+            Col : constant Col_Type := Position.Col;
+         begin
+            if Row >= 1
+              and then Row <= Screen_Height
+              and then Col >= 1
+              and then Col <= Screen_Width
+            then
+               Screen_Next (Row, Col) :=
+                 (Value      => Item,
+                  Background => Background,
+                  Foreground => Foreground,
+                  Style      => Style);
+            end if;
+         end;
+      end if;
    end Put;
 
    procedure Put_Indexed (
@@ -288,10 +535,34 @@ package body Malef.Platform.Terminal.Output is
       Foreground : in Palette_Index;
       Style      : in Style_Type) is
    begin
-      Move_To (Position.Row, Position.Col);
-      Format (Background, Foreground, Style);
-      Buffer.Wide_Wide_Put (Item);
-      Current_Cursor.Col := @ + Width (Item);
+      if not (Use_Screen_Diff
+              and then Opened_Frames > 0
+              and then Screen_Next /= null)
+      then
+         Move_To (Position.Row, Position.Col);
+         Format (Background, Foreground, Style);
+         Buffer.Wide_Wide_Put (Item);
+         Current_Cursor.Col := @ + Width (Item);
+      end if;
+
+      if Screen_Next /= null then
+         declare
+            Row : constant Row_Type := Position.Row;
+            Col : constant Col_Type := Position.Col;
+         begin
+            if Row >= 1
+              and then Row <= Screen_Height
+              and then Col >= 1
+              and then Col <= Screen_Width
+            then
+               Screen_Next (Row, Col) :=
+                 (Value      => Item,
+                  Background => Current_Background,
+                  Foreground => Current_Foreground,
+                  Style      => Style);
+            end if;
+         end;
+      end if;
    end Put_Indexed;
 
    procedure Flush is

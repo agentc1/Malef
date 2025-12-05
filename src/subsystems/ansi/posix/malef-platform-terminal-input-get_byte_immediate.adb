@@ -85,8 +85,6 @@ separate (Malef.Platform.Terminal.Input)
          raise Termination_Error;
       elsif Count = 0 then
          raise Device_Error;
-      elsif Buffer = EOF_Ch then
-         raise End_Error;
       elsif ferror (stdin) /= 0 then
          raise Device_Error;
       else

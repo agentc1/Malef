@@ -157,25 +157,233 @@ package body Malef.Platform.Terminal.Input is
    task body Input_Task is
       use Malef.Events;
       use Malef.Platform.Events;
+
       Key : Key_Type;
+
+      type Escape_State is
+        (Idle,
+         Saw_Escape,
+         Saw_Escape_Bracket,
+         Saw_Escape_Mouse);
+
+      State       : Escape_State := Idle;
+      Param_1     : Natural := 0;
+      Param_2     : Natural := 0;
+      Param_3     : Natural := 0;
+      Param_Index : Natural := 0;
+
+      procedure Reset_Escape is
+      begin
+         State       := Idle;
+         Param_1     := 0;
+         Param_2     := 0;
+         Param_3     := 0;
+         Param_Index := 0;
+      end Reset_Escape;
    begin
       loop
          Catch_End_Error : declare
          begin
             Get_Immediate (Wide_Wide_Character (Key));
+
+            declare
+               Raw_Key : constant Key_Type := Key;
+            begin
+               --  SGR mouse tracking based on xterm sequences:
+               --    ESC [ < Cb ; Cx ; Cy M/m
+               case State is
+                  when Idle =>
+                     if Raw_Key = Key_Type'Val (27) then
+                        State       := Saw_Escape;
+                        Param_1     := 0;
+                        Param_2     := 0;
+                        Param_3     := 0;
+                        Param_Index := 0;
+                     end if;
+
+                  when Saw_Escape =>
+                     declare
+                        WWC : constant Wide_Wide_Character :=
+                          Wide_Wide_Character (Raw_Key);
+                     begin
+                        if WWC = '[' then
+                           State := Saw_Escape_Bracket;
+                        else
+                           Reset_Escape;
+                        end if;
+                     end;
+
+                  when Saw_Escape_Bracket =>
+                     declare
+                        WWC  : constant Wide_Wide_Character :=
+                          Wide_Wide_Character (Raw_Key);
+                        Code : constant Integer :=
+                          Wide_Wide_Character'Pos (WWC);
+                        Digit : Integer;
+                     begin
+                        if WWC = '<' then
+                           State       := Saw_Escape_Mouse;
+                           Param_1     := 0;
+                           Param_2     := 0;
+                           Param_3     := 0;
+                           Param_Index := 0;
+                        elsif Code >= Character'Pos ('0')
+                          and then Code <= Character'Pos ('9')
+                        then
+                           Digit := Code - Character'Pos ('0');
+
+                           if Param_Index = 0 then
+                              Param_Index := 1;
+                              Param_1     := Natural (Digit);
+                           elsif Param_Index = 1 then
+                              Param_1 :=
+                                Param_1 * 10 + Natural (Digit);
+                           elsif Param_Index = 2 then
+                              Param_2 :=
+                                Param_2 * 10 + Natural (Digit);
+                           else
+                              Param_3 :=
+                                Param_3 * 10 + Natural (Digit);
+                           end if;
+                        elsif Code = Character'Pos (';') then
+                           if Param_Index = 0 then
+                              Param_Index := 1;
+                           end if;
+                           if Param_Index = 1 then
+                              Param_Index := 2;
+                           else
+                              Param_Index := 3;
+                           end if;
+                        else
+                           Reset_Escape;
+                        end if;
+                     end;
+
+                  when Saw_Escape_Mouse =>
+                     declare
+                        WWC  : constant Wide_Wide_Character :=
+                          Wide_Wide_Character (Raw_Key);
+                        Code : constant Integer :=
+                          Wide_Wide_Character'Pos (WWC);
+                        Digit : Integer;
+                     begin
+                        if Code >= Character'Pos ('0')
+                          and then Code <= Character'Pos ('9')
+                        then
+                           Digit := Code - Character'Pos ('0');
+
+                           if Param_Index = 0 then
+                              Param_Index := 1;
+                              Param_1     := Natural (Digit);
+                           elsif Param_Index = 1 then
+                              Param_1 :=
+                                Param_1 * 10 + Natural (Digit);
+                           elsif Param_Index = 2 then
+                              Param_2 :=
+                                Param_2 * 10 + Natural (Digit);
+                           else
+                              Param_3 :=
+                                Param_3 * 10 + Natural (Digit);
+                           end if;
+                        elsif WWC = ';' then
+                           if Param_Index = 0 then
+                              Param_Index := 1;
+                           elsif Param_Index = 1 then
+                              Param_Index := 2;
+                           else
+                              Param_Index := 3;
+                           end if;
+                        elsif WWC = 'M' or else WWC = 'm' then
+                           if Param_Index >= 3 then
+                              declare
+                                 B_Code  : constant Natural := Param_1;
+                                 X_Pos   : constant Natural := Param_2;
+                                 Y_Pos   : constant Natural := Param_3;
+                                 Btn_Int : constant Integer :=
+                                   Integer (B_Code);
+                                 Is_Wheel  : constant Boolean :=
+                                   (Btn_Int / 64) mod 2 /= 0;
+                                 Is_Motion : constant Boolean :=
+                                   (Btn_Int / 32) mod 2 /= 0;
+                                 Base      : constant Integer :=
+                                   Btn_Int mod 4;
+                                 Button     : Mouse_Button := Left_Button;
+                                 Action     : Mouse_Action := Click;
+                                 Wheel_Dir  : Mouse_Wheel := Stay;
+                                 Row       : Row_Type := 1;
+                                 Col       : Col_Type := 1;
+                              begin
+                                 if Y_Pos > 0 then
+                                    Row := Row_Type (Integer (Y_Pos));
+                                 end if;
+                                 if X_Pos > 0 then
+                                    Col := Col_Type (Integer (X_Pos));
+                                 end if;
+
+                                 if Is_Wheel then
+                                    Button := Wheel;
+                                    Action := Wheel;
+                                    if Base = 0 then
+                                       Wheel_Dir := Up;
+                                    else
+                                       Wheel_Dir := Down;
+                                    end if;
+                                 elsif Is_Motion then
+                                    Action := Move;
+                                    case Base is
+                                       when 0 =>
+                                          Button := Left_Button;
+                                       when others =>
+                                          Button := Right_Button;
+                                    end case;
+                                 else
+                                    Action := Click;
+                                    case Base is
+                                       when 0 =>
+                                          Button := Left_Button;
+                                       when others =>
+                                          Button := Right_Button;
+                                    end case;
+                                 end if;
+
+                                 Queue.Enqueue
+                                   (+Event_Type'
+                                      (Name     => Mouse_Event,
+                                       Time     => From_Start,
+                                       Button   => Button,
+                                       Action   => Action,
+                                       Wheel    => Wheel_Dir,
+                                       Position => (Row => Row,
+                                                    Col => Col)));
+                              end;
+                           end if;
+
+                           Reset_Escape;
+                        else
+                           Reset_Escape;
+                        end if;
+                     end;
+               end case;
+            end;
+
+            --  Preserve existing keyboard semantics for consumers such as Ace.
             if Key = Key_Type'Val (0) then
                Key := Key_Unknown;
             elsif Key = Key_Type'Val (27) then
-               -- It is a sequence.
+               --  Start of an escape sequence.
                Key := Key_Unknown;
             end if;
-            Queue.Enqueue (+Event_Type'(Name => Keyboard_Event,
-                                        Time => From_Start,
-                                        Key  => Key));
+
+            Queue.Enqueue
+              (+Event_Type'
+                 (Name => Keyboard_Event,
+                  Time => From_Start,
+                  Key  => Key));
          exception
             when End_Error =>
-               Queue.Enqueue (+Event_Type'(Time => From_Start,
-                                           Name => Input_Closed));
+               Queue.Enqueue
+                 (+Event_Type'(Time => From_Start,
+                               Name => Input_Closed));
          end Catch_End_Error;
       end loop;
    end Input_Task;

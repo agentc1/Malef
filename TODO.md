@@ -63,4 +63,8 @@
   * `Radio_Buttons`
   * `Check_Buttons`
   * `Field` (Text, Numeric, ..., Constrained, Unconstrained) [Static_Predicate]
-  * `Scrollers`
+ * `Scrollers`
+
+ * Upstream Contributions
+  * `ANSI Terminal Backend`
+   - [ ] Review diff-based End_Frame, backing buffer, mouse, and cursor APIs as used by Ace and prepare an upstream PR against the original Malef repository (documenting scope, risks, and MALEF_DIFF_DEBUG usage).

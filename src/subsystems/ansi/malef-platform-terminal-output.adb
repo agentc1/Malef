@@ -160,6 +160,63 @@ package body Malef.Platform.Terminal.Output is
          & Natural'Image (Total));
    end Log_Diff;
 
+   procedure Log_Last_Row
+     (Next   : Screen_Buffer;
+      Height : Positive_Row_Count;
+      Width  : Positive_Col_Count) is
+   begin
+      if not Debug_Diff then
+         return;
+      end if;
+
+      if Height = 0 or else Width = 0 then
+         return;
+      end if;
+
+      if not Diff_Log_Initialized then
+         begin
+            Ada.Text_IO.Open
+              (File => Diff_Log,
+               Mode => Ada.Text_IO.Append_File,
+               Name => "malef_diff.log");
+         exception
+            when others =>
+               Ada.Text_IO.Create
+                 (File => Diff_Log,
+                  Mode => Ada.Text_IO.Out_File,
+                  Name => "malef_diff.log");
+         end;
+         Diff_Log_Initialized := True;
+      end if;
+
+      declare
+         use type Col_Type;
+         Last_Row : constant Row_Type := Row_Type (Height);
+         Line     : String (1 .. Integer (Width));
+      begin
+         for Col in 1 .. Width loop
+            declare
+               Cell_Glyph : constant Glyph :=
+                 Next (Last_Row, Col_Type (Col)).Value;
+               Code  : constant Integer :=
+                 Wide_Wide_Character'Pos (Cell_Glyph);
+            begin
+               if Code >= Character'Pos (Character'First)
+                 and then Code <= Character'Pos (Character'Last)
+               then
+                  Line (Integer (Col)) := Character'Val (Code);
+               else
+                  Line (Integer (Col)) := '?';
+               end if;
+            end;
+         end loop;
+
+         Ada.Text_IO.Put_Line
+           (Diff_Log,
+            "last-row=" & Line);
+      end;
+   end Log_Last_Row;
+
    -->> Formatting <<--
 
    procedure Escape is
@@ -352,26 +409,56 @@ package body Malef.Platform.Terminal.Output is
                   Total   : Natural := 0;
                begin
                   for Row in Current'Range (1) loop
-                     for Col in Current'Range (2) loop
-                        Total := Total + 1;
-                        if Current (Row, Col) /= Next (Row, Col) then
-                           declare
-                              Cell_Value : constant Cell := Next (Row, Col);
-                           begin
-                              Move_To (Row, Col);
-                              Format
-                                (Cell_Value.Background,
-                                 Cell_Value.Foreground,
-                                 Cell_Value.Style);
-                              Buffer.Wide_Wide_Put (Cell_Value.Value);
-                              Current (Row, Col) := Cell_Value;
+                     if Row = Screen_Height then
+                        --  Special-case the bottom row (status line /
+                        --  command line): redraw it unconditionally as a
+                        --  full-width band so no stale glyphs survive
+                        --  incremental diffs or terminal quirks on the
+                        --  last row.
+                        declare
+                           First_Col  : constant Col_Type := 1;
+                           First_Cell : constant Cell :=
+                             Next (Row, First_Col);
+                        begin
+                           Move_To (Row, Col_Type (First_Col));
+                           Format
+                             (First_Cell.Background,
+                              First_Cell.Foreground,
+                              First_Cell.Style);
+
+                           for Col in 1 .. Screen_Width loop
+                              Total := Total + 1;
+                              Buffer.Wide_Wide_Put
+                                (Next (Row, Col_Type (Col)).Value);
+                              Current (Row, Col_Type (Col)) :=
+                                Next (Row, Col_Type (Col));
                               Changed := Changed + 1;
-                           end;
-                        end if;
-                     end loop;
+                           end loop;
+                        end;
+                     else
+                        for Col in Current'Range (2) loop
+                           Total := Total + 1;
+                           if Current (Row, Col) /= Next (Row, Col) then
+                              declare
+                                 Cell_Value : constant Cell :=
+                                   Next (Row, Col);
+                              begin
+                                 Move_To (Row, Col);
+                                 Format
+                                   (Cell_Value.Background,
+                                    Cell_Value.Foreground,
+                                    Cell_Value.Style);
+                                 Buffer.Wide_Wide_Put (Cell_Value.Value);
+                                 Current (Row, Col) := Cell_Value;
+                                 Changed := Changed + 1;
+                              end;
+                           end if;
+                        end loop;
+                     end if;
                   end loop;
 
                   Log_Diff (Changed, Total);
+                  Log_Last_Row (Next, Screen_Height, Screen_Width);
                end;
             end if;
 

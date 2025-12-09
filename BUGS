@@ -1,2 +1,69 @@
 [1]   When suspending an application with Ctrl-Z and then resuming it with %1,
       the terminal configuration from termios is discarded.
+
+[2]   Status line corruption on bottom row when using diff-based ANSI backend.
+
+      When used as the backend for the Ace editor
+      (https://github.com/agentc1/ada-code-editor), some terminals show
+      corrupted text on the *last* screen row where Ace draws its status /
+      command line. The on-screen artifact looks like different status
+      messages have been merged together (for example, fragments of "Starting
+      build...", "Build succeeded", and "Quit requested" interleaved into a
+      single garbled string).
+
+      Investigation details:
+
+      * Ace builds the status line as a single, space-padded String and passes
+        it to TUI.Terminal.Malef_Adapter.Draw_Text, which forwards it
+        unchanged to Malef.Platform.Terminal.Output.Put.
+
+      * We enabled MALEF_DIFF_DEBUG and extended malef-platform-terminal-
+        output.adb to log the logical contents of the last row from
+        Screen_Next after each frame:
+
+           last-row=/tmp/tui_lsp_sample/main.adb  ·  Ln 1  Col 1
+           last-row=/tmp/tui_lsp_sample/main.adb  ·  Ln 1  Col 1 ? Starting build (alr build)...
+           last-row=/tmp/tui_lsp_sample/main.adb  ·  Ln 1  Col 1 ? Build started (alr build running in background)
+           last-row=/tmp/tui_lsp_sample/main.adb  ·  Ln 1  Col 1 ? Build succeeded
+           last-row=/tmp/tui_lsp_sample/main.adb  ·  Ln 1  Col 1 ? Quit requested
+
+        (The '?' is just a stand-in for the em dash.)  These lines confirm
+        that Screen_Next always contains a correct, fully updated status line;
+        the corruption only appears after ANSI emission.
+
+      * End_Frame currently walks Screen_Current / Screen_Next and emits only
+        the cells that differ, using Move_To + Format + Buffer.Wide_Wide_Put.
+        With synchronized updates enabled (ESC[?2026h / ESC[?2026l) and this
+        diff logic, the bottom row sometimes ends up visually corrupted even
+        though Screen_Next is correct.
+
+      Temporary workaround:
+
+      * In our fork, End_Frame now special-cases Row = Screen_Height
+        (the bottom row) and redraws it unconditionally as a full-width band:
+        we Move_To(row, 1), apply the style of the first cell, then write
+        every glyph in that row and copy Screen_Next into Screen_Current for
+        that row. All other rows still use the normal diff code.
+
+      * This eliminates the visible corruption for Ace while keeping the diff
+        logic for the main editor area.
+
+      Suspected root cause:
+
+      * A subtle interaction between the diff-based update loop, the tracking
+        of Current_Cursor / Width(Item), and synchronized updates on the
+        bottom row. Because Screen_Next is always correct, the bug is likely
+        in how we emit escape sequences or in assumptions about how the
+        terminal treats the last row when lines wrap or when only a subset of
+        cells change.
+
+      Future work:
+
+      * Reproduce this with a minimal Malef example (no Ace) that repeatedly
+        rewrites the last row with different long messages.
+      * Audit End_Frame and the diff logic for off-by-one issues on
+        Screen_Height / Screen_Width, especially around the last row and the
+        rightmost column.
+      * Decide whether to keep the bottom-row special case permanently or fix
+        the underlying diff/ANSI interaction so the generic path is safe for
+        all rows.

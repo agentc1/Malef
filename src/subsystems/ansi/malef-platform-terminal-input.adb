@@ -367,9 +367,10 @@ package body Malef.Platform.Terminal.Input is
             end;
 
             --  Preserve existing keyboard semantics for consumers such as Ace.
-            if Key = Key_Type'Val (0) then
-               Key := Key_Unknown;
-            elsif Key = Key_Type'Val (27) then
+            --  Map ESC (27) to Key_Unknown so higher layers can disambiguate
+            --  between bare ESC, Alt-modified keys, and CSI sequences without
+            --  losing the ability to observe NUL (for example, Ctrl+Space).
+            if Key = Key_Type'Val (27) then
                --  Start of an escape sequence.
                Key := Key_Unknown;
             end if;

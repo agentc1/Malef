@@ -361,6 +361,13 @@ package body Malef.Platform.Terminal.Output is
    begin
       -- TODO: Call termios
       Buffer.Put (ASCII.ESC & "[?1049h");
+      --  Enable kitty keyboard protocol so Ctrl+punctuation (for example,
+      --  Ctrl+'.') is distinguishable from plain text input in terminals that
+      --  implement it.
+      Buffer.Put (ASCII.ESC & "[>1u");
+      --  Request xterm's modifyOtherKeys so Ctrl+punctuation (for example,
+      --  Ctrl+'.') is distinguishable from plain text input.
+      Buffer.Put (ASCII.ESC & "[>4;2m");
       Format (7, 0, [others => False]);
       Opened_Frames := 0;
       -- Keep the hardware cursor visible; Ace/TUI will position it explicitly.
@@ -377,6 +384,10 @@ package body Malef.Platform.Terminal.Output is
       -- Disable mouse reporting and restore screen/cursor
       Buffer.Put (ASCII.ESC & "[?1006l");
       Buffer.Put (ASCII.ESC & "[?1002l");
+      --  Restore the previous keyboard mode (kitty keyboard protocol).
+      Buffer.Put (ASCII.ESC & "[<u");
+      --  Reset modifyOtherKeys to the terminal default.
+      Buffer.Put (ASCII.ESC & "[>4m");
       Buffer.Put (ASCII.ESC & "[?25h"   -- Make cursor visible
                 & ASCII.ESC & "[?1049l");
       Flush;
